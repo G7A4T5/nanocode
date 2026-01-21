@@ -199,6 +199,57 @@ def render_markdown(text):
     return re.sub(r"\*\*(.+?)\*\*", f"{BOLD}\\1{RESET}", text)
 
 
+def run_agentic_loop(messages, system_prompt, call_api_fn=call_api, run_tool_fn=run_tool, output=print):
+    # agentic loop: keep calling API until no more tool calls
+    while True:
+        response = call_api_fn(messages, system_prompt)
+        message = response["choices"][0]["message"]
+        content = message.get("content") or ""
+        tool_calls = message.get("tool_calls") or []
+        tool_results = []
+
+        if content:
+            output(f"\n{CYAN}⏺{RESET} {render_markdown(content)}")
+
+        for tool_call in tool_calls:
+            tool_name = tool_call["function"]["name"]
+            tool_args_raw = tool_call["function"]["arguments"]
+            try:
+                tool_args = json.loads(tool_args_raw) if tool_args_raw else {}
+            except json.JSONDecodeError:
+                tool_args = {}
+            arg_preview = str(list(tool_args.values())[0])[:50] if tool_args else ""
+            output(
+                f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})"
+            )
+
+            result = run_tool_fn(tool_name, tool_args)
+            result_lines = result.split("\n")
+            preview = result_lines[0][:60]
+            if len(result_lines) > 1:
+                preview += f" ... +{len(result_lines) - 1} lines"
+            elif len(result_lines[0]) > 60:
+                preview += "..."
+            output(f"  {DIM}⎿  {preview}{RESET}")
+
+            tool_results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "content": result,
+                }
+            )
+
+        assistant_message = {"role": "assistant", "content": content}
+        if tool_calls:
+            assistant_message["tool_calls"] = tool_calls
+        messages.append(assistant_message)
+
+        if not tool_results:
+            break
+        messages.extend(tool_results)
+
+
 def main():
     print(f"{BOLD}nanocode{RESET} | {DIM}VSELLM {MODEL} | {os.getcwd()}{RESET}\n")
     messages = []
@@ -220,54 +271,7 @@ def main():
 
             messages.append({"role": "user", "content": user_input})
 
-            # agentic loop: keep calling API until no more tool calls
-            while True:
-                response = call_api(messages, system_prompt)
-                message = response["choices"][0]["message"]
-                content = message.get("content") or ""
-                tool_calls = message.get("tool_calls") or []
-                tool_results = []
-
-                if content:
-                    print(f"\n{CYAN}⏺{RESET} {render_markdown(content)}")
-
-                for tool_call in tool_calls:
-                    tool_name = tool_call["function"]["name"]
-                    tool_args_raw = tool_call["function"]["arguments"]
-                    try:
-                        tool_args = json.loads(tool_args_raw) if tool_args_raw else {}
-                    except json.JSONDecodeError:
-                        tool_args = {}
-                    arg_preview = str(list(tool_args.values())[0])[:50] if tool_args else ""
-                    print(
-                        f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})"
-                    )
-
-                    result = run_tool(tool_name, tool_args)
-                    result_lines = result.split("\n")
-                    preview = result_lines[0][:60]
-                    if len(result_lines) > 1:
-                        preview += f" ... +{len(result_lines) - 1} lines"
-                    elif len(result_lines[0]) > 60:
-                        preview += "..."
-                    print(f"  {DIM}⎿  {preview}{RESET}")
-
-                    tool_results.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "content": result,
-                        }
-                    )
-
-                assistant_message = {"role": "assistant", "content": content}
-                if tool_calls:
-                    assistant_message["tool_calls"] = tool_calls
-                messages.append(assistant_message)
-
-                if not tool_results:
-                    break
-                messages.extend(tool_results)
+            run_agentic_loop(messages, system_prompt)
 
             print()
 
