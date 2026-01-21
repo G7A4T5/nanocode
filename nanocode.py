@@ -3,10 +3,6 @@
 
 import glob as globlib, json, os, re, subprocess, urllib.request
 
-OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
-API_URL = "https://openrouter.ai/api/v1/messages" if OPENROUTER_KEY else "https://api.anthropic.com/v1/messages"
-MODEL = os.environ.get("MODEL", "anthropic/claude-opus-4.5" if OPENROUTER_KEY else "claude-opus-4-5")
-
 # ANSI colors
 RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
 BLUE, CYAN, GREEN, YELLOW, RED = (
@@ -167,23 +163,80 @@ def make_schema():
     return result
 
 
-def call_api(messages, system_prompt):
-    request = urllib.request.Request(
-        API_URL,
-        data=json.dumps(
-            {
-                "model": MODEL,
-                "max_tokens": 8192,
-                "system": system_prompt,
-                "messages": messages,
-                "tools": make_schema(),
-            }
-        ).encode(),
-        headers={
+def make_openai_schema():
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["input_schema"],
+            },
+        }
+        for tool in make_schema()
+    ]
+
+
+def get_config():
+    vsellm_key = os.environ.get("VSELLM_KEY")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+    if vsellm_key:
+        return {
+            "provider": "VSELLM",
+            "api_url": "https://api.vsellm.ru/v1/chat/completions",
+            "model": os.environ.get("MODEL", "openai/gpt-5-nano"),
+            "headers": {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {vsellm_key}",
+            },
+            "mode": "openai",
+        }
+    if openrouter_key:
+        return {
+            "provider": "OpenRouter",
+            "api_url": "https://openrouter.ai/api/v1/messages",
+            "model": os.environ.get("MODEL", "anthropic/claude-opus-4.5"),
+            "headers": {
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+                "Authorization": f"Bearer {openrouter_key}",
+            },
+            "mode": "anthropic",
+        }
+    return {
+        "provider": "Anthropic",
+        "api_url": "https://api.anthropic.com/v1/messages",
+        "model": os.environ.get("MODEL", "claude-opus-4-5"),
+        "headers": {
             "Content-Type": "application/json",
             "anthropic-version": "2023-06-01",
-            **({"Authorization": f"Bearer {OPENROUTER_KEY}"} if OPENROUTER_KEY else {"x-api-key": os.environ.get("ANTHROPIC_API_KEY", "")}),
+            "x-api-key": os.environ.get("ANTHROPIC_API_KEY", ""),
         },
+        "mode": "anthropic",
+    }
+
+
+def call_api(messages, system_prompt):
+    config = get_config()
+    if config["mode"] == "openai":
+        payload = {
+            "model": config["model"],
+            "messages": [{"role": "system", "content": system_prompt}] + messages,
+            "tools": make_openai_schema(),
+            "max_tokens": 8192,
+        }
+    else:
+        payload = {
+            "model": config["model"],
+            "max_tokens": 8192,
+            "system": system_prompt,
+            "messages": messages,
+            "tools": make_schema(),
+        }
+    request = urllib.request.Request(
+        config["api_url"],
+        data=json.dumps(payload).encode(),
+        headers=config["headers"],
     )
     response = urllib.request.urlopen(request)
     return json.loads(response.read())
@@ -197,8 +250,71 @@ def render_markdown(text):
     return re.sub(r"\*\*(.+?)\*\*", f"{BOLD}\\1{RESET}", text)
 
 
+def parse_openai_tool_args(tool_call):
+    args = tool_call.get("function", {}).get("arguments", {})
+    if isinstance(args, str):
+        if not args:
+            return {}
+        try:
+            return json.loads(args)
+        except json.JSONDecodeError:
+            return {}
+    return args
+
+
+def handle_openai_response(messages, response):
+    message = response.get("choices", [{}])[0].get("message", {})
+    tool_calls = message.get("tool_calls", []) or []
+    content = message.get("content")
+
+    if content:
+        print(f"\n{CYAN}⏺{RESET} {render_markdown(content)}")
+
+    assistant_message = {"role": "assistant", "content": content}
+    if tool_calls:
+        assistant_message["tool_calls"] = tool_calls
+    messages.append(assistant_message)
+
+    tool_messages = []
+    for tool_call in tool_calls:
+        tool_name = tool_call.get("function", {}).get("name")
+        tool_args = parse_openai_tool_args(tool_call)
+        arg_preview = str(list(tool_args.values())[0])[:50] if tool_args else ""
+        print(f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})")
+
+        result = run_tool(tool_name, tool_args)
+        result_lines = result.split("\n")
+        preview = result_lines[0][:60]
+        if len(result_lines) > 1:
+            preview += f" ... +{len(result_lines) - 1} lines"
+        elif len(result_lines[0]) > 60:
+            preview += "..."
+        print(f"  {DIM}⎿  {preview}{RESET}")
+
+        tool_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.get("id"),
+                "content": result,
+            }
+        )
+    messages.extend(tool_messages)
+    return tool_messages
+
+
+def run_openai_loop(messages, system_prompt):
+    while True:
+        response = call_api(messages, system_prompt)
+        tool_messages = handle_openai_response(messages, response)
+        if not tool_messages:
+            break
+
+
 def main():
-    print(f"{BOLD}nanocode{RESET} | {DIM}{MODEL} ({'OpenRouter' if OPENROUTER_KEY else 'Anthropic'}) | {os.getcwd()}{RESET}\n")
+    config = get_config()
+    print(
+        f"{BOLD}nanocode{RESET} | {DIM}{config['model']} ({config['provider']}) | {os.getcwd()}{RESET}\n"
+    )
     messages = []
     system_prompt = f"Concise coding assistant. cwd: {os.getcwd()}"
 
@@ -219,45 +335,48 @@ def main():
             messages.append({"role": "user", "content": user_input})
 
             # agentic loop: keep calling API until no more tool calls
-            while True:
-                response = call_api(messages, system_prompt)
-                content_blocks = response.get("content", [])
-                tool_results = []
+            if config["mode"] == "openai":
+                run_openai_loop(messages, system_prompt)
+            else:
+                while True:
+                    response = call_api(messages, system_prompt)
+                    content_blocks = response.get("content", [])
+                    tool_results = []
 
-                for block in content_blocks:
-                    if block["type"] == "text":
-                        print(f"\n{CYAN}⏺{RESET} {render_markdown(block['text'])}")
+                    for block in content_blocks:
+                        if block["type"] == "text":
+                            print(f"\n{CYAN}⏺{RESET} {render_markdown(block['text'])}")
 
-                    if block["type"] == "tool_use":
-                        tool_name = block["name"]
-                        tool_args = block["input"]
-                        arg_preview = str(list(tool_args.values())[0])[:50]
-                        print(
-                            f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})"
-                        )
+                        if block["type"] == "tool_use":
+                            tool_name = block["name"]
+                            tool_args = block["input"]
+                            arg_preview = str(list(tool_args.values())[0])[:50]
+                            print(
+                                f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})"
+                            )
 
-                        result = run_tool(tool_name, tool_args)
-                        result_lines = result.split("\n")
-                        preview = result_lines[0][:60]
-                        if len(result_lines) > 1:
-                            preview += f" ... +{len(result_lines) - 1} lines"
-                        elif len(result_lines[0]) > 60:
-                            preview += "..."
-                        print(f"  {DIM}⎿  {preview}{RESET}")
+                            result = run_tool(tool_name, tool_args)
+                            result_lines = result.split("\n")
+                            preview = result_lines[0][:60]
+                            if len(result_lines) > 1:
+                                preview += f" ... +{len(result_lines) - 1} lines"
+                            elif len(result_lines[0]) > 60:
+                                preview += "..."
+                            print(f"  {DIM}⎿  {preview}{RESET}")
 
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block["id"],
-                                "content": result,
-                            }
-                        )
+                            tool_results.append(
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": block["id"],
+                                    "content": result,
+                                }
+                            )
 
-                messages.append({"role": "assistant", "content": content_blocks})
+                    messages.append({"role": "assistant", "content": content_blocks})
 
-                if not tool_results:
-                    break
-                messages.append({"role": "user", "content": tool_results})
+                    if not tool_results:
+                        break
+                    messages.append({"role": "user", "content": tool_results})
 
             print()
 
