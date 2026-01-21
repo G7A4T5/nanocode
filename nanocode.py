@@ -3,9 +3,9 @@
 
 import glob as globlib, json, os, re, subprocess, urllib.request
 
-OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
-API_URL = "https://openrouter.ai/api/v1/messages" if OPENROUTER_KEY else "https://api.anthropic.com/v1/messages"
-MODEL = os.environ.get("MODEL", "anthropic/claude-opus-4.5" if OPENROUTER_KEY else "claude-opus-4-5")
+VSELLM_KEY = os.environ.get("VSELLM_KEY")
+API_URL = "https://api.vsellm.ru/v1/chat/completions"
+MODEL = os.environ.get("MODEL", "openai/gpt-5-nano")
 
 # ANSI colors
 RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
@@ -155,12 +155,15 @@ def make_schema():
                 required.append(param_name)
         result.append(
             {
-                "name": name,
-                "description": description,
-                "input_schema": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                    },
                 },
             }
         )
@@ -168,21 +171,20 @@ def make_schema():
 
 
 def call_api(messages, system_prompt):
+    payload_messages = [{"role": "system", "content": system_prompt}] + messages
     request = urllib.request.Request(
         API_URL,
         data=json.dumps(
             {
                 "model": MODEL,
                 "max_tokens": 8192,
-                "system": system_prompt,
-                "messages": messages,
+                "messages": payload_messages,
                 "tools": make_schema(),
             }
         ).encode(),
         headers={
             "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            **({"Authorization": f"Bearer {OPENROUTER_KEY}"} if OPENROUTER_KEY else {"x-api-key": os.environ.get("ANTHROPIC_API_KEY", "")}),
+            "Authorization": f"Bearer {VSELLM_KEY}",
         },
     )
     response = urllib.request.urlopen(request)
@@ -198,7 +200,7 @@ def render_markdown(text):
 
 
 def main():
-    print(f"{BOLD}nanocode{RESET} | {DIM}{MODEL} ({'OpenRouter' if OPENROUTER_KEY else 'Anthropic'}) | {os.getcwd()}{RESET}\n")
+    print(f"{BOLD}nanocode{RESET} | {DIM}VSELLM {MODEL} | {os.getcwd()}{RESET}\n")
     messages = []
     system_prompt = f"Concise coding assistant. cwd: {os.getcwd()}"
 
@@ -221,43 +223,51 @@ def main():
             # agentic loop: keep calling API until no more tool calls
             while True:
                 response = call_api(messages, system_prompt)
-                content_blocks = response.get("content", [])
+                message = response["choices"][0]["message"]
+                content = message.get("content") or ""
+                tool_calls = message.get("tool_calls") or []
                 tool_results = []
 
-                for block in content_blocks:
-                    if block["type"] == "text":
-                        print(f"\n{CYAN}⏺{RESET} {render_markdown(block['text'])}")
+                if content:
+                    print(f"\n{CYAN}⏺{RESET} {render_markdown(content)}")
 
-                    if block["type"] == "tool_use":
-                        tool_name = block["name"]
-                        tool_args = block["input"]
-                        arg_preview = str(list(tool_args.values())[0])[:50]
-                        print(
-                            f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})"
-                        )
+                for tool_call in tool_calls:
+                    tool_name = tool_call["function"]["name"]
+                    tool_args_raw = tool_call["function"]["arguments"]
+                    try:
+                        tool_args = json.loads(tool_args_raw) if tool_args_raw else {}
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    arg_preview = str(list(tool_args.values())[0])[:50] if tool_args else ""
+                    print(
+                        f"\n{GREEN}⏺ {tool_name.capitalize()}{RESET}({DIM}{arg_preview}{RESET})"
+                    )
 
-                        result = run_tool(tool_name, tool_args)
-                        result_lines = result.split("\n")
-                        preview = result_lines[0][:60]
-                        if len(result_lines) > 1:
-                            preview += f" ... +{len(result_lines) - 1} lines"
-                        elif len(result_lines[0]) > 60:
-                            preview += "..."
-                        print(f"  {DIM}⎿  {preview}{RESET}")
+                    result = run_tool(tool_name, tool_args)
+                    result_lines = result.split("\n")
+                    preview = result_lines[0][:60]
+                    if len(result_lines) > 1:
+                        preview += f" ... +{len(result_lines) - 1} lines"
+                    elif len(result_lines[0]) > 60:
+                        preview += "..."
+                    print(f"  {DIM}⎿  {preview}{RESET}")
 
-                        tool_results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": block["id"],
-                                "content": result,
-                            }
-                        )
+                    tool_results.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "content": result,
+                        }
+                    )
 
-                messages.append({"role": "assistant", "content": content_blocks})
+                assistant_message = {"role": "assistant", "content": content}
+                if tool_calls:
+                    assistant_message["tool_calls"] = tool_calls
+                messages.append(assistant_message)
 
                 if not tool_results:
                     break
-                messages.append({"role": "user", "content": tool_results})
+                messages.extend(tool_results)
 
             print()
 
