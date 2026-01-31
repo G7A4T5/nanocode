@@ -16,19 +16,26 @@ Built using Claude Code, then used to build itself.
 ## Usage
 
 ```bash
-export VSELLM_KEY="your-key"
+export ANTHROPIC_API_KEY="your-key"
 python nanocode.py
 ```
 
-By default, nanocode uses `openai/gpt-5-nano`. Override with `MODEL` if needed:
+### OpenRouter
+
+Use [OpenRouter](https://openrouter.ai) to access any model:
 
 ```bash
-export VSELLM_KEY="your-key"
+export OPENROUTER_API_KEY="your-key"
+python nanocode.py
+```
+
+To use a different model:
+
+```bash
+export OPENROUTER_API_KEY="your-key"
 export MODEL="openai/gpt-5.2"
 python nanocode.py
 ```
-
-VSELLM is OpenAI-compatible and uses the `/v1/chat/completions` endpoint.
 
 ## Commands
 
