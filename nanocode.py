@@ -3,14 +3,10 @@
 
 import glob as globlib, json, os, re, subprocess, sys, urllib.request
 
-OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
-VSELLM_API_URL = os.environ.get("VSELLM_API_URL", "").strip()
-VSELLM_MODEL = os.environ.get("VSELLM_MODEL", "").strip()
-VSELLM_API_KEY = os.environ.get("VSELLM_API_KEY", "").strip()
-OLLAMA_API_URL = os.environ.get("OLLAMA_API_URL", "").strip()
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "").strip()
-VLLM_API_URL = os.environ.get("VLLM_API_URL", "").strip()
-VLLM_MODEL = os.environ.get("VLLM_MODEL", "").strip()
+VALID_PROVIDERS = {"vsellm", "ollama", "vllm", "openrouter", "anthropic"}
+PROVIDER = None
+API_URL = None
+MODEL = None
 
 
 def normalize_vsellm_url(url):
@@ -38,48 +34,143 @@ def normalize_vllm_url(url):
     return f"{trimmed}/v1/chat/completions"
 
 
-def select_provider():
-    if VSELLM_API_URL:
+def _require_env(var_name, provider):
+    value = os.environ.get(var_name, "").strip()
+    if not value:
+        raise ValueError(f"{provider} requires {var_name} to be set")
+    return value
+
+
+def select_provider(provider):
+    provider = (provider or "").strip().lower()
+    if provider not in VALID_PROVIDERS:
+        allowed = ", ".join(sorted(VALID_PROVIDERS))
+        raise ValueError(f"NANOCODE_PROVIDER must be one of: {allowed}")
+    if provider == "vsellm":
+        api_url = _require_env("VSELLM_API_URL", "vsellm")
+        model = _require_env("VSELLM_MODEL", "vsellm")
+        api_key = os.environ.get("VSELLM_API_KEY", "").strip()
         return {
             "name": "VSELLM",
             "kind": "openai",
-            "api_url": normalize_vsellm_url(VSELLM_API_URL),
-            "model": VSELLM_MODEL,
-            "headers": {"Authorization": f"Bearer {VSELLM_API_KEY}"} if VSELLM_API_KEY else {},
+            "api_url": normalize_vsellm_url(api_url),
+            "model": model,
+            "headers": {"Authorization": f"Bearer {api_key}"} if api_key else {},
             "extra": {},
         }
-    if OLLAMA_API_URL:
+    if provider == "ollama":
+        api_url = _require_env("OLLAMA_API_URL", "ollama")
+        model = _require_env("OLLAMA_MODEL", "ollama")
         return {
             "name": "Ollama",
             "kind": "ollama",
-            "api_url": normalize_ollama_url(OLLAMA_API_URL),
-            "model": OLLAMA_MODEL,
+            "api_url": normalize_ollama_url(api_url),
+            "model": model,
             "headers": {},
             "extra": {},
         }
-    if VLLM_API_URL:
-        headers = {"Authorization": f"Bearer {OPENROUTER_KEY}"} if OPENROUTER_KEY else {}
+    if provider == "vllm":
+        api_url = _require_env("VLLM_API_URL", "vllm")
+        model = _require_env("VLLM_MODEL", "vllm")
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+        headers = {"Authorization": f"Bearer {openrouter_key}"} if openrouter_key else {}
         return {
             "name": "vLLM",
             "kind": "openai",
-            "api_url": normalize_vllm_url(VLLM_API_URL),
-            "model": VLLM_MODEL,
+            "api_url": normalize_vllm_url(api_url),
+            "model": model,
             "headers": headers,
             "extra": {"parallel_tool_calls": False},
         }
+    if provider == "openrouter":
+        api_key = _require_env("OPENROUTER_API_KEY", "openrouter")
+        model = os.environ.get("MODEL", "anthropic/claude-opus-4.5")
+        return {
+            "name": "OpenRouter",
+            "kind": "anthropic",
+            "api_url": "https://openrouter.ai/api/v1/messages",
+            "model": model,
+            "headers": {"Authorization": f"Bearer {api_key}"},
+            "extra": {},
+        }
+    api_key = _require_env("ANTHROPIC_API_KEY", "anthropic")
+    model = os.environ.get("MODEL", "claude-opus-4-5")
     return {
-        "name": "OpenRouter" if OPENROUTER_KEY else "Anthropic",
+        "name": "Anthropic",
         "kind": "anthropic",
-        "api_url": "https://openrouter.ai/api/v1/messages" if OPENROUTER_KEY else "https://api.anthropic.com/v1/messages",
-        "model": os.environ.get("MODEL", "anthropic/claude-opus-4.5" if OPENROUTER_KEY else "claude-opus-4-5"),
-        "headers": {"Authorization": f"Bearer {OPENROUTER_KEY}"} if OPENROUTER_KEY else {"x-api-key": os.environ.get("ANTHROPIC_API_KEY", "")},
+        "api_url": "https://api.anthropic.com/v1/messages",
+        "model": model,
+        "headers": {"x-api-key": api_key},
         "extra": {},
     }
 
 
-PROVIDER = select_provider()
-API_URL = PROVIDER["api_url"]
-MODEL = PROVIDER["model"]
+def select_provider_implicit():
+    vsellm_api_url = os.environ.get("VSELLM_API_URL", "").strip()
+    if vsellm_api_url:
+        vsellm_model = os.environ.get("VSELLM_MODEL", "").strip()
+        vsellm_api_key = os.environ.get("VSELLM_API_KEY", "").strip()
+        return {
+            "name": "VSELLM",
+            "kind": "openai",
+            "api_url": normalize_vsellm_url(vsellm_api_url),
+            "model": vsellm_model,
+            "headers": {"Authorization": f"Bearer {vsellm_api_key}"} if vsellm_api_key else {},
+            "extra": {},
+        }
+    ollama_api_url = os.environ.get("OLLAMA_API_URL", "").strip()
+    if ollama_api_url:
+        ollama_model = os.environ.get("OLLAMA_MODEL", "").strip()
+        return {
+            "name": "Ollama",
+            "kind": "ollama",
+            "api_url": normalize_ollama_url(ollama_api_url),
+            "model": ollama_model,
+            "headers": {},
+            "extra": {},
+        }
+    vllm_api_url = os.environ.get("VLLM_API_URL", "").strip()
+    if vllm_api_url:
+        vllm_model = os.environ.get("VLLM_MODEL", "").strip()
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+        headers = {"Authorization": f"Bearer {openrouter_key}"} if openrouter_key else {}
+        return {
+            "name": "vLLM",
+            "kind": "openai",
+            "api_url": normalize_vllm_url(vllm_api_url),
+            "model": vllm_model,
+            "headers": headers,
+            "extra": {"parallel_tool_calls": False},
+        }
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+    return {
+        "name": "OpenRouter" if openrouter_key else "Anthropic",
+        "kind": "anthropic",
+        "api_url": "https://openrouter.ai/api/v1/messages"
+        if openrouter_key
+        else "https://api.anthropic.com/v1/messages",
+        "model": os.environ.get(
+            "MODEL",
+            "anthropic/claude-opus-4.5" if openrouter_key else "claude-opus-4-5",
+        ),
+        "headers": {"Authorization": f"Bearer {openrouter_key}"}
+        if openrouter_key
+        else {"x-api-key": os.environ.get("ANTHROPIC_API_KEY", "")},
+        "extra": {},
+    }
+
+
+def resolve_provider():
+    provider = os.environ.get("NANOCODE_PROVIDER", "").strip()
+    if provider:
+        return select_provider(provider)
+    if os.environ.get("NANOCODE_ALLOW_IMPLICIT_PROVIDER", "") == "1":
+        print("WARNING: implicit provider selection is deprecated", file=sys.stderr)
+        return select_provider_implicit()
+    raise ValueError(
+        "NANOCODE_PROVIDER must be set to select a provider "
+        "(set NANOCODE_ALLOW_IMPLICIT_PROVIDER=1 to use deprecated implicit selection)"
+    )
 
 # ANSI colors
 RESET, BOLD, DIM = "\033[0m", "\033[1m", "\033[2m"
@@ -416,6 +507,8 @@ def parse_ollama_response(response):
 
 
 def call_api(messages, system_prompt):
+    if PROVIDER is None:
+        raise ValueError("Provider not initialized")
     if PROVIDER["kind"] == "openai":
         payload = {
             "model": MODEL,
@@ -495,6 +588,10 @@ def configure_stdio():
 
 def main():
     configure_stdio()
+    global PROVIDER, API_URL, MODEL
+    PROVIDER = resolve_provider()
+    API_URL = PROVIDER["api_url"]
+    MODEL = PROVIDER["model"]
     print(f"{BOLD}nanocode{RESET} | {DIM}{MODEL} ({PROVIDER['name']}) | {os.getcwd()}{RESET}\n")
     messages = []
     system_prompt = f"Concise coding assistant. cwd: {os.getcwd()}"

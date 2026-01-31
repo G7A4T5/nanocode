@@ -16,26 +16,30 @@ Built using Claude Code, then used to build itself.
 ## Usage
 
 ```bash
+export NANOCODE_PROVIDER="anthropic"
 export ANTHROPIC_API_KEY="your-key"
 python nanocode.py
 ```
 
-### Provider selection (precedence)
+### Provider selection (explicit)
 
-nanocode chooses the first configured backend in this order:
-
-1. `VSELLM_API_URL`
-2. `OLLAMA_API_URL`
-3. `VLLM_API_URL`
-4. OpenRouter/Anthropic defaults
+Provider selection is now explicit to remove hidden priority when multiple backends are configured.
+Set `NANOCODE_PROVIDER` to one of: `vsellm`, `ollama`, `vllm`, `openrouter`, `anthropic`.
 
 All requests are non-streaming to keep behavior deterministic.
+
+To temporarily allow the legacy implicit selection order, set:
+
+```bash
+export NANOCODE_ALLOW_IMPLICIT_PROVIDER=1
+```
 
 ### OpenRouter
 
 Use [OpenRouter](https://openrouter.ai) to access any model:
 
 ```bash
+export NANOCODE_PROVIDER="openrouter"
 export OPENROUTER_API_KEY="your-key"
 python nanocode.py
 ```
@@ -43,6 +47,7 @@ python nanocode.py
 To use a different model:
 
 ```bash
+export NANOCODE_PROVIDER="openrouter"
 export OPENROUTER_API_KEY="your-key"
 export MODEL="openai/gpt-5.2"
 python nanocode.py
@@ -51,6 +56,7 @@ python nanocode.py
 ### VSELLM (OpenAI-compatible proxy)
 
 ```bash
+export NANOCODE_PROVIDER="vsellm"
 export VSELLM_API_URL="https://api.vsellm.ru/v1"
 export VSELLM_MODEL="openai/gpt-5-nano"
 export VSELLM_API_KEY="your-key"
@@ -60,6 +66,7 @@ python nanocode.py
 ### Ollama
 
 ```bash
+export NANOCODE_PROVIDER="ollama"
 export OLLAMA_API_URL="http://localhost:11434"
 export OLLAMA_MODEL="llama3.1"
 python nanocode.py
@@ -68,6 +75,7 @@ python nanocode.py
 ### vLLM (OpenAI-compatible)
 
 ```bash
+export NANOCODE_PROVIDER="vllm"
 export VLLM_API_URL="http://localhost:8000"
 export VLLM_MODEL="your-model"
 python nanocode.py
