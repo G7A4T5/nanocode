@@ -20,6 +20,17 @@ export ANTHROPIC_API_KEY="your-key"
 python nanocode.py
 ```
 
+### Provider selection (precedence)
+
+nanocode chooses the first configured backend in this order:
+
+1. `VSELLM_API_URL`
+2. `OLLAMA_API_URL`
+3. `VLLM_API_URL`
+4. OpenRouter/Anthropic defaults
+
+All requests are non-streaming to keep behavior deterministic.
+
 ### OpenRouter
 
 Use [OpenRouter](https://openrouter.ai) to access any model:
@@ -34,6 +45,31 @@ To use a different model:
 ```bash
 export OPENROUTER_API_KEY="your-key"
 export MODEL="openai/gpt-5.2"
+python nanocode.py
+```
+
+### VSELLM (OpenAI-compatible proxy)
+
+```bash
+export VSELLM_API_URL="https://api.vsellm.ru/v1"
+export VSELLM_MODEL="openai/gpt-5-nano"
+export VSELLM_API_KEY="your-key"
+python nanocode.py
+```
+
+### Ollama
+
+```bash
+export OLLAMA_API_URL="http://localhost:11434"
+export OLLAMA_MODEL="llama3.1"
+python nanocode.py
+```
+
+### vLLM (OpenAI-compatible)
+
+```bash
+export VLLM_API_URL="http://localhost:8000"
+export VLLM_MODEL="your-model"
 python nanocode.py
 ```
 
@@ -65,6 +101,12 @@ python nanocode.py
 
 ⏺ There's one Python file: nanocode.py
 ```
+
+## UTF-8 console support
+
+nanocode now reconfigures stdin/stdout/stderr to UTF-8 (with safe replacement) and
+attempts to switch Windows console code pages to UTF-8. This improves Cyrillic
+input/output reliability in Windows PowerShell and Ubuntu bash.
 
 ## License
 
